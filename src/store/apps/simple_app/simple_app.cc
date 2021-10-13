@@ -60,22 +60,33 @@ int main(int argc, char **argv) {
 									false);
 
     // Construct the client
-    Client client = new indicusstore::Client(config, // config object 
-                                             0, // client id
+    std::vector<int> closestReplicas;
+    Client client = new indicusstore::Client(*config, // config object 
+                                             (uint64_t) 0, // client id
                                              1, // number of shards
                                              1, // num groups
-                                             "", // closestReplicas (start w/ single server; haven't constructed add'l replicas)
+                                             closestReplicas, // closestReplicas (start w/ single server; haven't constructed add'l replicas)
                                              false, // ping_replicas
-                                             tport, 
-                                             part,
+                                             *tport, 
+                                             *part,
                                              true, // tapir_sync_commit 
-                                             "read_quorum", // readMessages
-                                             "one", // readQuorumSize
+                                             (uint64_t) 0, // readMessages: should be uint64_t, might be 0?
+                                             (uint64_t) 1, // readQuorumSize: should be uint64_t; if readMessages is 0, this should be 1.
                                              params, 
-                                             keyManager, 
-                                             1000UL, // indicus_phase1DecisionTimeout
-											 1, // indicus_max_consecutive_abstains,
+                                             *keyManager, 
+                                             (uint64_t) 1000, // indicus_phase1DecisionTimeout: should be uint64_t
+											 (uint64_t) 1, // indicus_max_consecutive_abstains,
 											 TrueTime(0, 0)); // clock_skew, clock_error
+
+    // indicuststore::Client constructor signature (for reference)
+    /* Client(transport::Configuration *config, uint64_t id, int nShards,
+    int nGroups,
+    const std::vector<int> &closestReplicas, bool pingReplicas, Transport *transport,
+    Partitioner *part, bool syncCommit, uint64_t readMessages,
+    uint64_t readQuorumSize, Parameters params,
+    KeyManager *keyManager, uint64_t phase1DecisionTimeout, uint64_t consecutiveMax, TrueTime timeServer)
+    */
+
     SyncClient syncClient = new SyncClient(client);
     uint32_t timeout = 30; // no idea what a reasonable value is
 
