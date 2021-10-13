@@ -1,4 +1,4 @@
-#include "store/apps/simple_app.h"
+#include "store/apps/simple_app/simple_app.h"
 
 int main(int argc, char **argv) {
     // All values have been set to default values of corresponding
@@ -21,14 +21,13 @@ int main(int argc, char **argv) {
 
     // key manager: first arg is indicus_key_path; "keys" assumes this is run inside src dir
     KeyManager* keyManager;
-    keyMananger = new KeyManager("keys", 4, true);
+    keyManager = new KeyManager("keys", crypto::DONNA, true);
 
     // Partitioner (presumably for sharding?)
     Partitioner *part;
     part = new DefaultPartitioner();
 
     // Failure parameters for injected failure (?)
-    indicusstore::InjectFailure failure;
     indicusstore::InjectFailure failure;
     failure.type = indicusstore::InjectFailureType::CLIENT_EQUIVOCATE;
     failure.timeMs = rand() % 100; //offset client failures a bit.
