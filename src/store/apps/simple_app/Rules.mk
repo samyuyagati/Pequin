@@ -1,17 +1,15 @@
 d := $(dir $(lastword $(MAKEFILE_LIST)))
 
-SRCS += $(addprefix $(d), benchmark.cc benchmark_oneshot.cc bench_client.cc async_transaction_bench_client.cc	sync_transaction_bench_client.cc)
+SRCS += $(addprefix $(d), simple_app.cc)
 
 OBJS-all-store-clients := $(OBJS-strong-client) $(OBJS-weak-client) \
-		$(LIB-tapir-client) $(LIB-morty-client) $(LIB-janus-client) \
-		$(LIB-indicus-client) $(LIB-pbft-store) $(LIB-hotstuff-store)
+		$(LIB-tapir-client)  \
+		$(LIB-indicus-client) 
 
-LIB-bench-client := $(o)benchmark.o $(o)bench_client.o \
-		$(o)async_transaction_bench_client.o $(o)sync_transaction_bench_client.o
+LIB-simple-app := $(o)simple_app.o 
 
-OBJS-all-bench-clients := $(LIB-retwis) $(LIB-tpcc) $(LIB-sync-tpcc) $(LIB-async-tpcc) \
-	$(LIB-smallbank) $(LIB-rw)  
+OBJS-simple-app := $(LIB-simple-app) 
 
-$(d)benchmark: $(LIB-key-selector) $(LIB-bench-client) $(LIB-latency) $(LIB-tcptransport) $(LIB-udptransport) $(OBJS-all-store-clients) $(OBJS-all-bench-clients) $(LIB-bench-client) $(LIB-store-common)
+$(d)simpleapp: $(LIB-key-selector) $(LIB-latency) $(LIB-tcptransport) $(LIB-udptransport) $(OBJS-all-store-clients) $(OBJS-simple-app) $(LIB-store-common)
 
-BINS +=  $(d)benchmark
+BINS +=  $(d)simpleapp
