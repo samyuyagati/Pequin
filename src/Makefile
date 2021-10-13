@@ -170,6 +170,7 @@ include lockserver/Rules.mk
 include timeserver/Rules.mk
 include libtapir/Rules.mk
 include create_keys/Rules.mk
+include store/apps/simple_app/Rules.mk
 ##################################################################
 # General rules
 #

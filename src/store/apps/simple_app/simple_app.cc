@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
     config = new transport::Configuration(configStream);
 
     // TCP transport (next to last arg is indicus_hyper_threading; default val in benchmark.cc is true)
-    TCPTransport* tport;
+    Transport* tport;
     tport = new TCPTransport(0.0, 0.0, 0, false, 0, 1, true, false);
 
     // key manager: first arg is indicus_key_path; "keys" assumes this is run inside src dir
@@ -24,16 +24,16 @@ int main(int argc, char **argv) {
     keyManager = new KeyManager("keys", crypto::DONNA, true);
 
     // Partitioner (presumably for sharding?)
-    Partitioner *part;
+    Partitioner* part;
     part = new DefaultPartitioner();
 
     // Failure parameters for injected failure (?)
     indicusstore::InjectFailure failure;
     failure.type = indicusstore::InjectFailureType::CLIENT_EQUIVOCATE;
     failure.timeMs = rand() % 100; //offset client failures a bit.
-	failure.enabled = 1 * 1 + 0 < floor(1 * 1 * 0 / 100); // Failure not enabled.
-	std::cerr << "client_id = " << 0 << "thread_id = " << 1 << ". Failure enabled: "<< failure.enabled <<  std::endl;
-	failure.frequency = 0; // 100 // indicus_inject_failure_freq;
+	  failure.enabled = 1 * 1 + 0 < floor(1 * 1 * 0 / 100); // Failure not enabled.
+	  std::cerr << "client_id = " << 0 << "thread_id = " << 1 << ". Failure enabled: "<< failure.enabled <<  std::endl;
+	  failure.frequency = 0; // 100 // indicus_inject_failure_freq;
 
     // Various parameters
     indicusstore::Parameters params(true, // indicus_sign_messages
@@ -61,19 +61,19 @@ int main(int argc, char **argv) {
 
     // Construct the client
     std::vector<int> closestReplicas;
-    Client client = new indicusstore::Client(*config, // config object 
+    Client *client = new indicusstore::Client(config, // config object 
                                              (uint64_t) 0, // client id
                                              1, // number of shards
                                              1, // num groups
                                              closestReplicas, // closestReplicas (start w/ single server; haven't constructed add'l replicas)
                                              false, // ping_replicas
-                                             *tport, 
-                                             *part,
+                                             tport, 
+                                             part,
                                              true, // tapir_sync_commit 
                                              (uint64_t) 0, // readMessages: should be uint64_t, might be 0?
                                              (uint64_t) 1, // readQuorumSize: should be uint64_t; if readMessages is 0, this should be 1.
                                              params, 
-                                             *keyManager, 
+                                             keyManager, 
                                              (uint64_t) 1000, // indicus_phase1DecisionTimeout: should be uint64_t
 											 (uint64_t) 1, // indicus_max_consecutive_abstains,
 											 TrueTime(0, 0)); // clock_skew, clock_error
@@ -87,15 +87,17 @@ int main(int argc, char **argv) {
     KeyManager *keyManager, uint64_t phase1DecisionTimeout, uint64_t consecutiveMax, TrueTime timeServer)
     */
 
-    SyncClient syncClient = new SyncClient(client);
+    SyncClient *syncClient = new SyncClient(client);
     uint32_t timeout = 30; // no idea what a reasonable value is
 
     // Do a simple series of transactions
-    std::thread clientThread = new std::thread([syncClient, timeout]() {
-        syncClient.Begin(timeout);
-        syncClient.Put("x", "5", timeout);
-        std::string readValue = syncClient.Get("x", timeout);
-        syncClient.Commit(timeout);
+    std::thread *clientThread = new std::thread([syncClient, timeout]() {
+        syncClient->Begin(timeout);
+        syncClient->Put("x", "5", timeout);
+        std::string readValue;
+        syncClient->Get("x", readValue, timeout);
+        std::cout << "value read for x: " << readValue;
+        syncClient->Commit(timeout);
     });
 }
 
