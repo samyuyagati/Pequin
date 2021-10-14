@@ -44,7 +44,7 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
     fprintf(stderr, "process_id: %d, total_processes: %d \n", process_id, total_processes);
     //TODO: add config param for hyperthreading
     //bool hyperthreading = true;
-    int num_cpus = 8; //std::thread::hardware_concurrency(); ///(2-hyperthreading);
+    int num_cpus = std::thread::hardware_concurrency(); ///(2-hyperthreading);
     fprintf(stderr, "Num_cpus: %d \n", num_cpus);
     num_cpus /= total_processes;
     int offset = process_id * num_cpus;
@@ -52,7 +52,7 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
     uint32_t num_threads = (uint32_t) std::max(1, num_cpus);
     // Currently: First CPU = MainThread.
     running = true;
-    for (uint32_t i = 1; i < num_threads; i++) {
+    for (uint32_t i = 1; i < 4; i++) {
       //if(i % 2 == 0) continue;
       std::thread *t;
       //Mainthread
@@ -129,7 +129,7 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
     }
       // Create a cpu_set_t object representing a set of CPUs. Clear it and mark
       // only CPU i as set.
-      cpu_set_t cpuset;
+      /* cpu_set_t cpuset;
       CPU_ZERO(&cpuset);
       CPU_SET(i+offset, &cpuset);
       if(i+offset > 7) return; //XXX This is a hack to support the non-crypto experiment that does not actually use multiple cores 
@@ -140,6 +140,7 @@ void ThreadPool::start(int process_id, int total_processes, bool hyperthreading,
           Panic("Error calling pthread_setaffinity_np: %d", rc);
       }
       Debug("MainThread running on CPU %d.", sched_getcpu());
+      */
       threads.push_back(t);
       t->detach();
     }
