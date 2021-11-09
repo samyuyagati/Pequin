@@ -1,5 +1,16 @@
 #include "store/apps/simple_app/simple_app.h"
+#include <sys/time.h>
+#include <csignal>
 
+::Transport *tport = nullptr;
+void Cleanup(int signal) {
+  tport->Stop();
+}
+
+/*void TimeInterval() {
+  transport.Timer(0, std::bind(&TimeInterval, this));
+}
+*/
 int main(int argc, char **argv) {
     // All values have been set to default values of corresponding
     // flags, which are prescribed in benchmark.cc
@@ -16,7 +27,9 @@ int main(int argc, char **argv) {
     config = new transport::Configuration(configStream);
 
     // TCP transport (next to last arg is indicus_hyper_threading; default val in benchmark.cc is true)
-    Transport* tport;
+//    Transport* tport;
+    // setting 4th param to true is a hack to add events to the event queue
+    // to avoid immediate exit, but it makes it difficult to kill the program
     tport = new TCPTransport(0.0, 0.0, 0, false, 0, 1, true, false);
 
     // key manager: first arg is indicus_key_path; "keys" assumes this is run inside src dir
@@ -87,17 +100,39 @@ int main(int argc, char **argv) {
     KeyManager *keyManager, uint64_t phase1DecisionTimeout, uint64_t consecutiveMax, TrueTime timeServer)
     */
 
+    // Create a dummy event
+//    transport.Timer(2000, 
+
     SyncClient *syncClient = new SyncClient(client);
-    uint32_t timeout = 30; // no idea what a reasonable value is
+    uint32_t timeout = UINT_MAX; // no idea what a reasonable value is
 
     // Do a simple series of transactions
     std::thread *clientThread = new std::thread([syncClient, timeout]() {
+        std::cerr << "Started client thread\n";
         syncClient->Begin(timeout);
+      // could be an issue in syncClient that's prevent the TCPCnxn from
+      // happening, in which case there would be no events and the thread
+      // would exit
+        std::cerr << "Invoked Begin\n";
         syncClient->Put("x", "5", timeout);
         std::string readValue;
         syncClient->Get("x", readValue, timeout);
-        std::cout << "value read for x: " << readValue;
+        std::cerr << "value read for x: " << readValue << "\n";
         syncClient->Commit(timeout);
+        std::cerr << "Committed value for x\n";
     });
+    std::signal(SIGKILL, Cleanup);
+    std::signal(SIGTERM, Cleanup);
+    std::signal(SIGINT, Cleanup);
+    usleep(500*1000);
+    tport->Run();
+    std::cerr << "tport run called from main client \n";
+    return 0;
+    // possibly issue is libevent will Stop tport if no events in queue.
+    // why doesn't store/server.cc exit immediately also, in that case?
+    // need to add pending event(s) manually before calling Run.
+    // but then need libevent obj
+    //  that is not accessible via the transport object?
+    // L1134 - 1145 in benchmark.cc for cleanup code if needed
 }
 
