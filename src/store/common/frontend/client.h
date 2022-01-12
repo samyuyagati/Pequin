@@ -56,6 +56,10 @@ class Client {
       uint32_t timeout, bool retry = false) = 0;
 
   // Get the value corresponding to key.
+  virtual void Query(const std::string &key, get_callback gcb, 
+      get_timeout_callback gtcb, uint32_t timeout) = 0;
+
+  // Get the value corresponding to key.
   virtual void Get(const std::string &key, get_callback gcb,
       get_timeout_callback gtcb, uint32_t timeout) = 0;
 

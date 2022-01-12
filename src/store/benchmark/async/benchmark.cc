@@ -70,6 +70,11 @@
 #include <thread>
 #include <vector>
 
+#include "hsql/SQLParser.h"	
+#include <fstream>	
+#include <iostream>	
+#include <sstream> 
+
 enum protomode_t {
 	PROTO_UNKNOWN,
 	PROTO_TAPIR,
@@ -534,7 +539,7 @@ DEFINE_double(hotspot_probability, 0.9, "probability of ending in hotspot");
 DEFINE_int32(timeout, 5000, "timeout in ms (for smallbank)");
 DEFINE_string(customer_name_file_path, "smallbank_names", "path to file"
     " containing names to be loaded (for smallbank)");
-
+DEFINE_string(sql_query, "", "path to file with sql query.");
 DEFINE_LATENCY(op);
 
 std::vector<::AsyncClient *> asyncClients;
@@ -558,6 +563,7 @@ int main(int argc, char **argv) {
 "           processing systems.");
 	gflags::ParseCommandLineFlags(&argc, &argv, true);
 
+ 	
   // parse transport protocol
   transmode_t trans = TRANS_UNKNOWN;
   int numTransModes = sizeof(trans_args);
@@ -712,7 +718,7 @@ int main(int argc, char **argv) {
         return 1;
       }
       std::string key;
-      while (std::getline(in, key)) {
+      if (std::getline(in, key)) {
         keys.push_back(key);
       }
       in.close();
@@ -1070,7 +1076,7 @@ int main(int argc, char **argv) {
         UW_ASSERT(asyncClient != nullptr);
         bench = new rw::RWClient(keySelector, FLAGS_num_ops_txn, FLAGS_rw_read_only,
             *asyncClient, *tport, seed,
-            FLAGS_num_requests, FLAGS_exp_duration, FLAGS_delay,
+            1, FLAGS_exp_duration, FLAGS_delay,
             FLAGS_warmup_secs, FLAGS_cooldown_secs, FLAGS_tput_interval,
             FLAGS_abort_backoff, FLAGS_retry_aborted, FLAGS_max_backoff,
             FLAGS_max_attempts);

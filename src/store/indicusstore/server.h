@@ -115,8 +115,10 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
   void ReceiveMessageInternal(const TransportAddress &remote,
       const std::string &type, const std::string &data,
       void *meta_data);
-
+  void GrabDependencies(proto::QueryReply* reply);
+  void GrabReadSet(proto::QueryReply* reply);
   void HandleRead(const TransportAddress &remote, proto::Read &msg);
+  void HandleQuery(const TransportAddress &remote, proto::Query &msg);
   void HandlePhase1_atomic(const TransportAddress &remote,
       proto::Phase1 &msg);
   void ProcessPhase1_atomic(const TransportAddress &remote,
@@ -346,16 +348,20 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
   void MessageToSign(::google::protobuf::Message* msg,
       proto::SignedMessage *signedMessage, signedCallback cb);
   proto::ReadReply *GetUnusedReadReply();
+  proto::QueryReply *GetUnusedQueryReply();
   proto::Phase1Reply *GetUnusedPhase1Reply();
   proto::Phase2Reply *GetUnusedPhase2Reply();
   proto::Read *GetUnusedReadmessage();
+  proto::Query *GetUnusedQuerymessage();
   proto::Phase1 *GetUnusedPhase1message();
   proto::Phase2 *GetUnusedPhase2message();
   proto::Writeback *GetUnusedWBmessage();
   void FreeReadReply(proto::ReadReply *reply);
+  void FreeQueryReply(proto::QueryReply *reply);
   void FreePhase1Reply(proto::Phase1Reply *reply);
   void FreePhase2Reply(proto::Phase2Reply *reply);
   void FreeReadmessage(proto::Read *msg);
+  void FreeQuerymessage(proto::Query *msg);
   void FreePhase1message(proto::Phase1 *msg);
   void FreePhase2message(proto::Phase2 *msg);
   void FreeWBmessage(proto::Writeback *msg);
@@ -454,6 +460,7 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
   /* Declare protobuf objects as members to avoid stack alloc/dealloc costs */
   proto::SignedMessage signedMessage;
   proto::Read read;
+  proto::Query query;
   proto::Phase1 phase1;
   proto::Phase2 phase2;
   proto::Writeback writeback;
@@ -468,6 +475,7 @@ class Server : public TransportReceiver, public ::Server, public PingServer {
   std::vector<proto::Phase1Reply *> p1Replies;
   std::vector<proto::Phase2Reply *> p2Replies;
   std::vector<proto::Read *> readMessages;
+  std::vector<proto::Query *> queryMessages;
   std::vector<proto::Phase1 *> p1messages;
   std::vector<proto::Phase2 *> p2messages; //
   std::vector<proto::Writeback *> WBmessages; //

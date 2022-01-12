@@ -110,6 +110,11 @@ class ShardClient : public TransportReceiver, public PingInitiator, public PingT
   // Begin a transaction.
   virtual void Begin(uint64_t id);
 
+  // Execute a SQL Query	
+  virtual void Query(uint64_t id, const std::string &key, const TimestampMessage &ts,	
+      uint64_t readMessages, uint64_t rqs, uint64_t rds, read_callback gcb,	
+      read_timeout_callback gtcb, uint32_t timeout);
+
   // Get the value corresponding to key.
   virtual void Get(uint64_t id, const std::string &key, const TimestampMessage &ts,
       uint64_t readMessages, uint64_t rqs, uint64_t rds, read_callback gcb,
@@ -196,6 +201,29 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
     read_callback gcb;
     read_timeout_callback gtcb;
     bool firstCommittedReply;
+  };
+
+    struct PendingQuorumQuery {	
+    PendingQuorumQuery(uint64_t reqId) : reqId(reqId),	
+        numReplies(0UL), numOKReplies(0UL), hasDep(false),	
+        firstCommittedReply(true) { }	
+    ~PendingQuorumQuery() { }	
+    uint64_t reqId;	
+    std::string key;	
+    Timestamp rts;	
+    uint64_t rqs;	
+    uint64_t rds;	
+    Timestamp maxTs;	
+    std::string maxValue;	
+    uint64_t numReplies;	
+    uint64_t numOKReplies;	
+    std::map<Timestamp, std::pair<proto::Write, uint64_t>> prepared;	
+    std::map<Timestamp, proto::Signatures> preparedSigs;	
+    proto::Dependency dep;	
+    bool hasDep;	
+    read_callback gcb;	
+    read_timeout_callback gtcb;	
+    bool firstCommittedReply;	
   };
 
   struct PendingPhase1 {
@@ -355,6 +383,7 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
   void GetTimeout(uint64_t reqId);
 
   /* Callbacks for hearing back from a shard for an operation. */
+  void HandleQueryReply(const proto::QueryReply &queryReply);
   void HandleReadReply(const proto::ReadReply &readReply);
   void HandlePhase1Reply(proto::Phase1Reply &phase1Reply);
   void ProcessP1R(proto::Phase1Reply &reply, bool FB_path = false, PendingFB *pendingFB = nullptr, const std::string *txnDigest = nullptr);
@@ -376,20 +405,24 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
 //TODO seperate the locks for these!!!!
   std::mutex writeProtoMutex;
   std::mutex readProtoMutex;
+  std::mutex queryProtoMutex;
   std::mutex p1ProtoMutex;
   std::mutex p2ProtoMutex;
 
   proto::Write *GetUnusedWrite();
+  proto::QueryReply *GetUnusedQueryReply();
   proto::ReadReply *GetUnusedReadReply();
   proto::Phase1Reply *GetUnusedPhase1Reply();
   proto::Phase2Reply *GetUnusedPhase2Reply();
 
   void FreeWrite(proto::Write *write);
+  void FreeQueryReply(proto::QueryReply *reply);
   void FreeReadReply(proto::ReadReply *reply);
   void FreePhase1Reply(proto::Phase1Reply *reply);
   void FreePhase2Reply(proto::Phase2Reply *reply);
 
   std::vector<proto::Write *> writes;
+  std::vector<proto::QueryReply *> queryReplies;
   std::vector<proto::ReadReply *> readReplies;
   std::vector<proto::Phase1Reply *> p1Replies;
   std::vector<proto::Phase2Reply *> p2Replies;
@@ -432,7 +465,8 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
   uint64_t lastReqId;
   proto::Transaction txn;
   std::map<std::string, std::string> readValues;
-
+  // do i need a queryValues, wher its a map of rows, which would be defined in proto
+  std::unordered_map<uint64_t, PendingQuorumQuery *> pendingQuerys;
   std::unordered_map<uint64_t, PendingQuorumGet *> pendingGets;
   std::unordered_map<uint64_t, PendingPhase1 *> pendingPhase1s;
   std::unordered_map<uint64_t, PendingPhase2 *> pendingPhase2s;
@@ -450,12 +484,14 @@ virtual void Phase2Equivocate_Simulate(uint64_t id, const proto::Transaction &tx
   std::unordered_map<uint64_t, uint64_t> test_mapping;
   //keep additional maps for this from txnDigest ->Pending For Fallback instances?
 
+  proto::Query query;
   proto::Read read;
   proto::Phase1 phase1;
   proto::Phase2 phase2;
   proto::Writeback writeback;
   proto::Abort abort;
   proto::ReadReply readReply;
+  proto::QueryReply queryReply;
   proto::Phase1Reply phase1Reply;
   proto::Phase2Reply phase2Reply;
   PingMessage ping;

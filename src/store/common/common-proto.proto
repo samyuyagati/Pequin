@@ -10,6 +10,11 @@ message ReadMessage {
     required TimestampMessage readtime = 2;
 }
 
+message QueryMessage {
+    required bytes key = 1;
+    required TimestampMessage readtime = 2;
+}
+
 message WriteMessage {
     required bytes key = 1;
     required bytes value = 2;

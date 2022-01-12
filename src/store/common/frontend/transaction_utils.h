@@ -34,7 +34,8 @@ enum OperationType {
   PUT,
   COMMIT,
   ABORT,
-  WAIT
+  WAIT,
+  QUERY
 };
 
 struct Operation {
@@ -46,6 +47,8 @@ struct Operation {
 Operation Wait();
 
 Operation Get(const std::string &key);
+
+Operation Query(const std::string  &key);
 
 Operation Put(const std::string &key,
     const std::string &value);

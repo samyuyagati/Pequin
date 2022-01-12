@@ -39,6 +39,16 @@ message Read {
   required TimestampMessage timestamp = 3;
 }
 
+message Query {
+  required uint64 req_id = 1;
+  required bytes key = 2;
+  required TimestampMessage timestamp = 3;
+}
+
+message ReadSet {
+  repeated Transaction txns = 1;
+}
+
 message GroupedSignatures {
   map<uint64, Signatures> grouped_sigs = 1;
 }
@@ -74,6 +84,10 @@ message Dependency {
   required int64 involved_group = 3;
 }
 
+message Dependencies {
+  repeated Dependency dpnd = 1;
+}
+
 message Write {
   optional bytes committed_value = 1;
   optional TimestampMessage committed_timestamp = 2;
@@ -92,6 +106,18 @@ message ReadReply {
   }
 }
 
+message QueryReply {
+  required uint64 req_id = 1;
+  required bytes key = 2;
+  optional CommittedProof proof = 3;
+  oneof prepared_oneof {
+    Write write = 4;
+    SignedMessage signed_write = 5;
+  }
+  optional ReadSet readset= 6;
+  optional Dependencies dpnds = 7;
+}
+
 // Phase 1
 message Transaction {
   required uint64 client_id = 1;
@@ -101,6 +127,7 @@ message Transaction {
   repeated WriteMessage write_set = 5;
   repeated Dependency deps = 6;
   required TimestampMessage timestamp = 7;
+  repeated QueryMessage query_set = 8;
 }
 
 message Phase1 {

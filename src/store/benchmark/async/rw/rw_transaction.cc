@@ -52,8 +52,19 @@ Operation RWTransaction::GetNextOperation(size_t outstandingOpCount, size_t fini
       return Wait();
     }
     else if (readOnly || outstandingOpCount % 2 == 0) {
-      //std::cerr << "read: " << GetKey(finishedOpCount) << std::endl;
-      return Get(GetKey(finishedOpCount));
+      std::cerr << "SEND QUERY AST : " << GetKey(finishedOpCount) << std::endl;
+      // std::ifstream inFile;	
+      // inFile.open("sql.txt");	
+      // std::stringstream strStream;	
+      // strStream << inFile.rdbuf();	
+      // std::string query = strStream.str();	
+      	
+      // hsql::SQLParserResult result;	
+      // hsql::SQLParser::parse(query, &result);	
+      // if (result.isValid() && result.size() > 0) {	
+      //     // fprintf(stderr, "PARSER SEEMS TO LINK UP\n");	
+      // }	
+      return Query("sql.txt");
     } else  {
       //std::cerr << "write: " << GetKey(finishedOpCount) << std::endl;
       auto strValueItr = readValues.find(GetKey(finishedOpCount));

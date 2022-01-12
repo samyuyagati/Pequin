@@ -158,6 +158,62 @@ void Client::Begin(begin_callback bcb, begin_timeout_callback btcb,
   });
 }
 
+void Client::Query(const std::string &key, get_callback gcb,
+    get_timeout_callback gtcb, uint32_t timeout) {
+
+  transport->Timer(0, [this, key, gcb, gtcb, timeout]() {
+    // Latency_Start(&getLatency);
+
+    Debug("GET[%lu:%lu] for key %s", client_id, client_seq_num,
+        BytesToHex(key, 16).c_str());
+
+    // Contact the appropriate shard to get the value.
+    std::vector<int> txnGroups(txn.involved_groups().begin(), txn.involved_groups().end());
+    int i = (*part)(key, nshards, -1, txnGroups) % ngroups;
+
+    // If needed, add this shard to set of participants and send BEGIN.
+    if (!IsParticipant(i)) {
+      txn.add_involved_groups(i);
+      bclient[i]->Begin(client_seq_num);
+    }
+
+    std::cerr << "THIS IS INDICUS::Client Query " << key << std::endl;
+
+    read_callback rcb = [gcb, this](int status, const std::string &key,
+        const std::string &val, const Timestamp &ts, const proto::Dependency &dep,
+        bool hasDep, bool addReadSet) {
+
+      uint64_t ns = 0; //Latency_End(&getLatency);
+      if (Message_DebugEnabled(__FILE__)) {
+        Debug("GET[%lu:%lu] Callback for key %s with %lu bytes and ts %lu.%lu after %luus.",
+            client_id, client_seq_num, BytesToHex(key, 16).c_str(), val.length(),
+            ts.getTimestamp(), ts.getID(), ns / 1000);
+        if (hasDep) {
+          Debug("GET[%lu:%lu] Callback for key %s with dep ts %lu.%lu.",
+              client_id, client_seq_num, BytesToHex(key, 16).c_str(),
+              dep.write().prepared_timestamp().timestamp(),
+              dep.write().prepared_timestamp().id());
+        }
+      }
+      // if (addReadSet) {
+      //   QueryMessage *query = txn.add_read_set();
+      //   query->set_key(key);
+      //   ts.serialize(query->mutable_readtime());
+      // }
+      if (hasDep) {
+        *txn.add_deps() = dep;
+      }
+      gcb(status, key, val, ts);
+    };
+    read_timeout_callback rtcb = gtcb;
+
+    // Send the GET operation to appropriate shard.
+    bclient[i]->Query(client_seq_num, key, txn.timestamp(), readMessages,
+        readQuorumSize, params.readDepSize, rcb, rtcb, timeout);
+  });
+}
+
+
 void Client::Get(const std::string &key, get_callback gcb,
     get_timeout_callback gtcb, uint32_t timeout) {
 

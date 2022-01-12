@@ -93,6 +93,11 @@ void Client::Begin(begin_callback bcb, begin_timeout_callback btcb, uint32_t tim
   });
 }
 
+void Client::Query(const std::string &key, get_callback gcb,
+    get_timeout_callback gtcb, uint32_t timeout) {
+  std::cerr << "Placeholder" << std::endl;
+}
+
 void Client::Get(const std::string &key, get_callback gcb,
     get_timeout_callback gtcb, uint32_t timeout) {
   transport->Timer(0, [this, key, gcb, gtcb, timeout]() {

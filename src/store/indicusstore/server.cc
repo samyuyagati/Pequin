@@ -231,7 +231,7 @@ Server::~Server() {
 void Server::ReceiveMessageInternal(const TransportAddress &remote,
       const std::string &type, const std::string &data, void *meta_data) {
 
-
+  std::cerr << "THIS IS MESSAGE handeling" << std::endl;
   if (type == read.GetTypeName()) {
 
     //if no dispatching OR if dispatching both deser and Handling to 2nd main thread (no workers)
@@ -245,6 +245,28 @@ void Server::ReceiveMessageInternal(const TransportAddress &remote,
       readCopy->ParseFromString(data);
       auto f = [this, &remote, readCopy](){
         this->HandleRead(remote, *readCopy);
+        return (void*) true;
+      };
+      if(params.parallel_reads){
+        transport->DispatchTP_noCB(std::move(f));
+      }
+      else{
+        transport->DispatchTP_main(std::move(f));
+      }
+    }
+  } else if (type == query.GetTypeName()) {
+    //if no dispatching OR if dispatching both deser and Handling to 2nd main thread (no workers)
+    std::cerr << "THIS IS SERVER query handling" << std::endl;
+    if(!params.mainThreadDispatching || (params.dispatchMessageReceive && !params.parallel_reads) ){
+      query.ParseFromString(data);
+      HandleQuery(remote, query);
+    }
+    //if dispatching to second main or other workers
+    else{
+      proto::Query* queryCopy = GetUnusedQuerymessage();
+      queryCopy->ParseFromString(data);
+      auto f = [this, &remote, queryCopy](){
+        this->HandleQuery(remote, *queryCopy);
         return (void*) true;
       };
       if(params.parallel_reads){
@@ -665,6 +687,188 @@ void Server::HandleRead(const TransportAddress &remote,
     sendCB();
   }
   if(params.mainThreadDispatching && (!params.dispatchMessageReceive || params.parallel_reads)) FreeReadmessage(&msg);
+}
+
+void Server::GrabReadSet(proto::QueryReply* reply) {
+  // build read set
+  // call reply->set_allocated_readset()
+  std::cerr << "Building Read Set" << std::endl;
+
+}
+
+void Server::GrabDependencies(proto::QueryReply* reply) {
+  // build set of dependencies
+  // call reply->set_allocated_dpnds()
+  std::cerr << "Grabbing Dependencies" << std::endl;
+}
+
+void Server::HandleQuery(const TransportAddress &remote,
+     proto::Query &msg) {
+  Debug("Query[%lu:%lu] for key %s with ts %lu.%lu.", msg.timestamp().id(),
+      msg.req_id(), BytesToHex(msg.key(), 16).c_str(),
+      msg.timestamp().timestamp(), msg.timestamp().id());
+  Timestamp ts(msg.timestamp());
+  if (CheckHighWatermark(ts)) {
+    // ignore request if beyond high watermark
+    Debug("Query timestamp beyond high watermark.");
+    if(params.mainThreadDispatching && (!params.dispatchMessageReceive || params.parallel_reads)) FreeQuerymessage(&msg);
+    return;
+  }
+
+  std::pair<Timestamp, Server::Value> tsVal;
+  bool exists = store.get(msg.key(), ts, tsVal);
+
+  proto::QueryReply* queryReply = GetUnusedQueryReply();
+  queryReply->set_req_id(msg.req_id());
+  queryReply->set_key(msg.key());
+  GrabReadSet(queryReply);
+  GrabDependencies(queryReply);
+  
+  if (exists) {
+    Debug("Query[%lu] Committed value of length %lu bytes with ts %lu.%lu.",
+        msg.req_id(), tsVal.second.val.length(), tsVal.first.getTimestamp(),
+        tsVal.first.getID());
+    queryReply->mutable_write()->set_committed_value(tsVal.second.val);
+    tsVal.first.serialize(queryReply->mutable_write()->mutable_committed_timestamp());
+    if (params.validateProofs) {
+      *queryReply->mutable_proof() = *tsVal.second.proof;
+    }
+  }
+
+  TransportAddress *remoteCopy = remote.clone();
+
+  auto sendCB = [this, remoteCopy, queryReply]() {
+    this->transport->SendMessage(this, *remoteCopy, *queryReply);
+    delete remoteCopy;
+    FreeQueryReply(queryReply);
+  };
+
+  if (occType == MVTSO) {
+    /* update rts */
+    // TODO: For "proper Aborts": how to track RTS by transaction without knowing transaction digest?
+
+    //XXX multiple RTS as set:
+    //  if(params.mainThreadDispatching) rtsMutex.lock();
+    // rts[msg.key()].insert(ts);
+    //  if(params.mainThreadDispatching) rtsMutex.unlock();
+    //XXX single RTS that updates:
+     auto itr = rts.find(msg.key());
+     if(itr != rts.end()){
+       if(ts.getTimestamp() > itr->second ) {
+         rts[msg.key()] = ts.getTimestamp();
+       }
+     }
+     else{
+       rts[msg.key()] = ts.getTimestamp();
+     }
+
+
+    /* add prepared deps */
+    if (params.maxDepDepth > -2) {
+      const proto::Transaction *mostRecent = nullptr;
+
+      //TODO:: make threadsafe.
+      //std::pair<std::shared_mutex,std::map<Timestamp, const proto::Transaction *>> &x = preparedWrites[write.key()];
+      auto itr = preparedWrites.find(msg.key());
+      if (itr != preparedWrites.end()){
+
+        //std::pair &x = preparedWrites[write.key()];
+        std::shared_lock lock(itr->second.first);
+        if(itr->second.second.size() > 0) {
+
+          // there is a prepared write for the key being read
+          for (const auto &t : itr->second.second) {
+            if (mostRecent == nullptr || t.first > Timestamp(mostRecent->timestamp())) { //TODO: for efficiency only use it if its bigger than the committed write..
+              mostRecent = t.second;
+            }
+          }
+
+          if (mostRecent != nullptr) {
+            std::string preparedValue;
+            for (const auto &w : mostRecent->write_set()) {
+              if (w.key() == msg.key()) {
+                preparedValue = w.value();
+                break;
+              }
+            }
+
+            Debug("Prepared write with most recent ts %lu.%lu.",
+                mostRecent->timestamp().timestamp(), mostRecent->timestamp().id());
+            //std::cerr << "Dependency depth: " << (DependencyDepth(mostRecent)) << std::endl;
+            if (params.maxDepDepth == -1 || DependencyDepth(mostRecent) <= params.maxDepDepth) {
+              queryReply->mutable_write()->set_prepared_value("1");
+              *queryReply->mutable_write()->mutable_prepared_timestamp() = mostRecent->timestamp();
+              *queryReply->mutable_write()->mutable_prepared_txn_digest() = TransactionDigest(*mostRecent, params.hashDigest);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (params.validateProofs && params.signedMessages &&
+      (queryReply->write().has_committed_value() || (params.verifyDeps && queryReply->write().has_prepared_value()))) {
+    if (params.readReplyBatch) {
+      proto::Write* write = new proto::Write(queryReply->write());
+      // move: sendCB = std::move(sendCB) or {std::move(sendCB)}
+      MessageToSign(write, queryReply->mutable_signed_write(), [sendCB, write]() {
+        sendCB();
+        delete write;
+      });
+
+    } else if (params.signatureBatchSize == 1) {
+
+      if(params.multiThreading){
+        proto::Write* write = new proto::Write(queryReply->write());
+        auto f = [this, queryReply, sendCB = std::move(sendCB), write]()
+        {
+          SignMessage(write, keyManager->GetPrivateKey(id), id, queryReply->mutable_signed_write());
+          sendCB();
+          delete write;
+          return (void*) true;
+        };
+        transport->DispatchTP_noCB(std::move(f));
+      }
+      else{
+        proto::Write write(queryReply->write());
+        SignMessage(&write, keyManager->GetPrivateKey(id), id,
+            queryReply->mutable_signed_write());
+        sendCB();
+      }
+
+    } else {
+
+      if(params.multiThreading){
+
+        std::vector<::google::protobuf::Message *> msgs;
+        proto::Write* write = new proto::Write(queryReply->write()); //TODO might want to add re-use buffer
+        msgs.push_back(write);
+        std::vector<proto::SignedMessage *> smsgs;
+        smsgs.push_back(queryReply->mutable_signed_write());
+
+        auto f = [this, msgs, smsgs, sendCB = std::move(sendCB), write]()
+        {
+          SignMessages(msgs, keyManager->GetPrivateKey(id), id, smsgs, params.merkleBranchFactor);
+          sendCB();
+          delete write;
+          return (void*) true;
+        };
+        transport->DispatchTP_noCB(std::move(f));
+      }
+      else{
+        proto::Write write(queryReply->write());
+        std::vector<::google::protobuf::Message *> msgs;
+        msgs.push_back(&write);
+        std::vector<proto::SignedMessage *> smsgs;
+        smsgs.push_back(queryReply->mutable_signed_write());
+        SignMessages(msgs, keyManager->GetPrivateKey(id), id, smsgs, params.merkleBranchFactor);
+        sendCB();
+      }
+    } 
+  } else {
+    sendCB();
+  }
+  // if(params.mainThreadDispatching && (!params.dispatchMessageReceive || params.parallel_reads)) FreeQuerymessage(&msg);
 }
 
 //////////////////////
@@ -3128,6 +3332,12 @@ void Server::MessageToSign(::google::protobuf::Message* msg,
   }
 }
 
+
+
+
+proto::QueryReply *Server::GetUnusedQueryReply() {
+  return new proto::QueryReply();
+}
 //TODO: replace all of these with moodycamel queue (just check that try_dequeue is successful)
 proto::ReadReply *Server::GetUnusedReadReply() {
   return new proto::ReadReply();
@@ -3193,6 +3403,10 @@ proto::Read *Server::GetUnusedReadmessage() {
   // return msg;
 }
 
+proto::Query *Server::GetUnusedQuerymessage() {
+  return new proto::Query();
+}
+
 proto::Phase1 *Server::GetUnusedPhase1message() {
   return new proto::Phase1();
 
@@ -3251,6 +3465,10 @@ void Server::FreeReadReply(proto::ReadReply *reply) {
   // readReplies.push_back(reply);
 }
 
+void Server::FreeQueryReply(proto::QueryReply *reply) {
+  delete reply;
+}
+
 void Server::FreePhase1Reply(proto::Phase1Reply *reply) {
   delete reply;
   // std::unique_lock<std::mutex> lock(p1ReplyProtoMutex);
@@ -3264,6 +3482,10 @@ void Server::FreePhase2Reply(proto::Phase2Reply *reply) {
   // std::unique_lock<std::mutex> lock(p2ReplyProtoMutex);
   // reply->Clear();
   // p2Replies.push_back(reply);
+}
+
+void Server::FreeQuerymessage(proto::Query *msg) {
+  delete msg;
 }
 
 void Server::FreeReadmessage(proto::Read *msg) {

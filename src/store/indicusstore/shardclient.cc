@@ -75,6 +75,15 @@ void ShardClient::ReceiveMessage(const TransportAddress &remote,
       readReply.ParseFromString(data);
       HandleReadReply(readReply);
     }
+  } else if (type == queryReply.GetTypeName()) {
+    if(params.multiThreading) {
+      proto::QueryReply *curr_query = GetUnusedQueryReply();
+      curr_query->ParseFromString(data);
+    }
+    else {
+      queryReply.ParseFromString(data);
+      HandleQueryReply(queryReply);
+    }
   } else if (type == phase1Reply.GetTypeName()) {
     phase1Reply.ParseFromString(data);
     HandlePhase1Reply(phase1Reply);
@@ -132,6 +141,38 @@ void ShardClient::Begin(uint64_t id) {
   txn.Clear();
   readValues.clear();
 }
+
+void ShardClient::Query(uint64_t id, const std::string &key,
+    const TimestampMessage &ts, uint64_t readMessages, uint64_t rqs,
+    uint64_t rds, read_callback gcb, read_timeout_callback gtcb,
+    uint32_t timeout) {
+  if (BufferGet(key, gcb)) {
+    Debug("[group %i] read from buffer.", group);
+    return;
+  }
+
+  uint64_t reqId = lastReqId++;
+  PendingQuorumQuery *pendingQuery = new PendingQuorumQuery(reqId);
+  pendingQuerys[reqId] = pendingQuery;
+  pendingQuery->key = key;
+  pendingQuery->rqs = rqs;
+  pendingQuery->rds = rds;
+  pendingQuery->gcb = gcb;
+  pendingQuery->gtcb = gtcb;
+
+  query.Clear();
+  query.set_req_id(reqId);
+  query.set_key(key);
+  *query.mutable_timestamp() = ts;
+
+  UW_ASSERT(readMessages <= closestReplicas.size());
+  for (size_t i = 0; i < readMessages; ++i) {
+    Debug("[group %i] Sending QUERY to replica %lu", group, GetNthClosestReplica(i));
+    transport->SendMessageToReplica(this, group, GetNthClosestReplica(i), query);
+  }
+
+}
+
 
 void ShardClient::Get(uint64_t id, const std::string &key,
     const TimestampMessage &ts, uint64_t readMessages, uint64_t rqs,
@@ -985,6 +1026,146 @@ void ShardClient::HandleReadReply(const proto::ReadReply &reply) {
   }
 }
 
+void ShardClient::HandleQueryReply(const proto::QueryReply &reply) {
+  std::cerr << "HANDLEING QUERY REPLY IN ShardClient" << std::endl;
+  auto itr = this->pendingQuerys.find(reply.req_id());
+  if (itr == this->pendingQuerys.end()) {
+    return; // this is a stale request
+  }
+  PendingQuorumQuery *req = itr->second;
+  Debug("[group %i] ReadReply for %lu.", group, reply.req_id());
+
+  const proto::Write *write;
+  bool skip = false;
+
+  if (params.validateProofs && params.signedMessages) {
+    // consecutive_reads++;
+    // skip = (consecutive_reads % 3 == 0) ? true : false;
+    if (reply.has_signed_write()) {
+      if (!skip && !verifier->Verify(keyManager->GetPublicKey(reply.signed_write().process_id()),
+              reply.signed_write().data(), reply.signed_write().signature())) {
+        Debug("[group %i] Failed to validate signature for write.", group);
+        return;
+      }
+
+      if(!validatedPrepared.ParseFromString(reply.signed_write().data())) {
+        Debug("[group %i] Invalid serialization of write.", group);
+        return;
+      }
+
+      write = &validatedPrepared;
+    } else {
+      if (reply.has_write() && reply.write().has_committed_value()) {
+        Debug("[group %i] Reply contains unsigned committed value.", group);
+        return;
+      }
+
+      if (params.verifyDeps && reply.has_write() && reply.write().has_prepared_value()) {
+        Debug("[group %i] Reply contains unsigned prepared value.", group);
+        return;
+      }
+
+      write = &reply.write();
+      UW_ASSERT(!write->has_committed_value());
+      UW_ASSERT(!write->has_prepared_value() || !params.verifyDeps);
+    }
+  } else {
+    write = &reply.write();
+  }
+
+  // value and timestamp are valid
+  req->numReplies++;
+  if (write->has_committed_value() && write->has_committed_timestamp()) {
+    if (!skip && params.validateProofs) {
+      if (!reply.has_proof()) {
+        Debug("[group %i] Missing proof for committed write.", group);
+        return;
+      }
+
+      std::string committedTxnDigest = TransactionDigest(
+          reply.proof().txn(), params.hashDigest);
+      if (!ValidateTransactionWrite(reply.proof(), &committedTxnDigest,
+            req->key, write->committed_value(), write->committed_timestamp(),
+            config, params.signedMessages, keyManager, verifier)) {
+        Debug("[group %i] Failed to validate committed value for read %lu.",
+            group, reply.req_id());
+        // invalid replies can be treated as if we never received a reply from
+        //     a crashed replica
+        return;
+      }
+    }
+
+    Timestamp replyTs(write->committed_timestamp());
+    Debug("[group %i] ReadReply for %lu with committed %lu byte value and ts"
+        " %lu.%lu.", group, reply.req_id(), write->committed_value().length(),
+        replyTs.getTimestamp(), replyTs.getID());
+    if (req->firstCommittedReply || req->maxTs < replyTs) {
+      req->maxTs = replyTs;
+      req->maxValue = write->committed_value();
+    }
+    req->firstCommittedReply = false;
+  }
+
+  //TODO: change so client does not accept reads with depth > some t... (fine for now since
+  // servers dont fail and use the same param setting)
+  if (params.maxDepDepth > -2 && write->has_prepared_value() &&
+      write->has_prepared_timestamp() &&
+      write->has_prepared_txn_digest()) {
+    Timestamp preparedTs(write->prepared_timestamp());
+    Debug("[group %i] ReadReply for %lu with prepared %lu byte value and ts"
+        " %lu.%lu.", group, reply.req_id(), write->prepared_value().length(),
+        preparedTs.getTimestamp(), preparedTs.getID());
+    auto preparedItr = req->prepared.find(preparedTs);
+    if (preparedItr == req->prepared.end()) {
+      req->prepared.insert(std::make_pair(preparedTs,
+            std::make_pair(*write, 1)));
+    } else if (preparedItr->second.first == *write) {
+      preparedItr->second.second += 1;
+    }
+
+    if (params.validateProofs && params.signedMessages && params.verifyDeps) {
+      proto::Signature *sig = req->preparedSigs[preparedTs].add_sigs();
+      sig->set_process_id(reply.signed_write().process_id());
+      *sig->mutable_signature() = reply.signed_write().signature();
+    }
+  }
+  //TODO
+  // does any of this change if dpnds are sent with reply
+  if (req->numReplies >= req->rqs) {
+    if (params.maxDepDepth > -2) {
+      for (auto preparedItr = req->prepared.rbegin();
+          preparedItr != req->prepared.rend(); ++preparedItr) {
+        if (preparedItr->first < req->maxTs) {
+          break;
+        }
+
+        if (preparedItr->second.second >= req->rds) {
+          req->maxTs = preparedItr->first;
+          req->maxValue = preparedItr->second.first.prepared_value();
+          *req->dep.mutable_write() = preparedItr->second.first;
+          if (params.validateProofs && params.signedMessages && params.verifyDeps) {
+            *req->dep.mutable_write_sigs() = req->preparedSigs[preparedItr->first];
+          }
+          req->dep.set_involved_group(group);
+          req->hasDep = true;
+          break;
+        }
+      }
+    }
+    pendingQuerys.erase(itr);
+    //TODO 
+    // figure out how we should add to read set now and if we want to treat read var same way.
+    ReadMessage *read = txn.add_read_set();
+    *read->mutable_key() = req->key;
+    req->maxTs.serialize(read->mutable_readtime());
+    // readValues[req->key] = req->maxValue;
+    req->gcb(REPLY_OK, req->key, req->maxValue, req->maxTs, req->dep,
+        req->hasDep, true);
+    delete req;
+  }
+}
+
+
 
 void ShardClient::HandlePhase1Reply(proto::Phase1Reply &reply) {
 
@@ -1550,6 +1731,20 @@ proto::Write *ShardClient::GetUnusedWrite() {
   }
   return write;
 }
+
+proto::QueryReply *ShardClient::GetUnusedQueryReply() {
+  std::unique_lock<std::mutex> lock(readProtoMutex);
+  proto::QueryReply *reply;
+  if (queryReplies.size() > 0) {
+    reply = queryReplies.back();
+    reply->Clear();
+    queryReplies.pop_back();
+  } else {
+    reply = new proto::QueryReply();
+  }
+  return reply;
+}
+
 
 proto::ReadReply *ShardClient::GetUnusedReadReply() {
   std::unique_lock<std::mutex> lock(readProtoMutex);

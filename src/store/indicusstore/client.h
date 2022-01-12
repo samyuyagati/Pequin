@@ -79,6 +79,8 @@ class Client : public ::Client {
   // Begin a transaction.
   virtual void Begin(begin_callback bcb, begin_timeout_callback btcb,
       uint32_t timeout, bool retry = false) override;
+  virtual void Query(const std::string &key, get_callback gcb,
+      get_timeout_callback gtcb, uint32_t timeout) override;
 
   // Get the value corresponding to key.
   virtual void Get(const std::string &key, get_callback gcb,

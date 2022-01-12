@@ -49,6 +49,17 @@ void AsyncAdapterClient::ExecuteNextOperation() {
   Operation op = currTxn->GetNextOperation(outstandingOpCount, finishedOpCount,
       readValues);
   switch (op.type) {
+    case QUERY: {	
+      std::cerr << "AsyncAdapterClient will send query req " << op.key << std::endl;	
+      client->Query(op.key, std::bind(&AsyncAdapterClient::GetCallback, this,	
+        std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,	
+        std::placeholders::_4), std::bind(&AsyncAdapterClient::GetTimeout, this,	
+          std::placeholders::_1, std::placeholders::_2), timeout);	
+      ++outstandingOpCount;	
+      // timeout doesn't really matter?	
+      ExecuteNextOperation();	
+      break;	
+    }
     case GET: {
       client->Get(op.key, std::bind(&AsyncAdapterClient::GetCallback, this,
         std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,
